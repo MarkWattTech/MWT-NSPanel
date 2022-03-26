@@ -1,0 +1,653 @@
+# MWT NSPanel
+#(based on marcfagers original work https://github.com/marcfager/nspanel-mf)
+
+
+substitutions:
+  # Name the device and it's entities
+  device_name: nspanel-dev
+  
+# Functionality for the Nextion display
+external_components:
+  - source: github://pr#2956
+    components: [nextion]
+    refresh: 1h
+
+# Example config.yaml
+esphome:
+  name: nspanel
+  comment: $device_name
+
+esp32:
+  board: esp32dev
+
+# Wifi settings. Add these to your secrets.yaml. fast_connect must be true for a hidden ssid.
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+
+# API. Add api_pwd to your secrets.yaml.
+api:
+
+  services:
+    # Create a service to play a rtttl tones
+    # Example tones : https://codebender.cc/sketch:109888#RTTTL%20Songs.ino
+    - service: play_rtttl
+      variables:
+        song_str: string
+      then:
+        - rtttl.play:
+            rtttl: !lambda 'return song_str;'
+            
+    # Service to update the HMI file - this will be used to update and change our tft
+    - service: upload_tft
+      then:
+        - lambda: 'id(disp1)->upload_tft();'
+        
+    # Service to control the visible page from Home Assistant
+    - service: set_page
+      variables:
+        page: int
+      then:
+        - lambda: id(disp1).send_command_printf("page %i", page);
+        
+    # Service to show a notification on the screen for 15 s. Tap or wait to close
+    - service: notification
+      variables:
+        header: string
+        message: string
+      then:
+        - lambda: |-
+            id(disp1).set_component_text_printf("Notifications.head", "%s", header.c_str());
+            id(disp1).set_component_text_printf("Notifications.body", "%s", message.c_str());
+            id(disp1).send_command_printf("page 6");
+        - rtttl.play: "twobits:d=4,o=5,b=220:c6,8g,8g,a,g,p,b,c6"
+        - delay: 15s
+        - lambda: |-
+            id(disp1).send_command_printf("page 0");
+            id(disp1).set_component_text_printf("Notifications.head", " ");
+            id(disp1).set_component_text_printf("Notifications.body", " ");
+            id(disp1).send_command_printf("page 0");
+            
+    # Service to send a command directly to the display. Useful for testing
+    - service: send_command
+      variables:
+        cmd: string
+      then:
+        - lambda: 'id(disp1).send_command_printf("%s", cmd.c_str());'
+    # Service to show a QR code on the display (ex. for WiFi password)
+    - service: display_qr
+      variables:
+        qrdata: string
+      then:
+        - lambda: |-
+            id(disp1).set_component_text_printf("QR.qr0", "%s", qrdata.c_str());
+            id(disp1).send_command_printf("page 7");
+        - delay: 15s
+        - lambda: |-
+            id(disp1).send_command_printf("page 0");
+            id(disp1).send_command_printf("QR.qr0.txt=");
+            id(disp1).send_command_printf("page 0");
+    # Service to wake up screen
+    - service: wakeup_screen
+      then:
+        - lambda: |-
+            id(disp1).send_command_printf("page 0");
+
+
+# Time component that fetches time from Home Assistant and updates the display once a minute and when the display is ready at bootup (and time is available).
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+    on_time:
+      - seconds: 0
+        minutes: /1
+        then:
+          - lambda: id(disp1).set_component_text_printf("Home.time", "%02i:%02i", id(homeassistant_time).now().hour, id(homeassistant_time).now().minute);
+          - lambda: id(disp1).set_component_text_printf("Home.date", "%i-%02i-%02i", id(homeassistant_time).now().year, id(homeassistant_time).now().month, id(homeassistant_time).now().day_of_month);
+    on_time_sync:
+        then:
+          - wait_until:
+              switch.is_on: nextion_init
+          - lambda: id(disp1).set_component_text_printf("Home.time", "%02i:%02i", id(homeassistant_time).now().hour, id(homeassistant_time).now().minute);
+          - lambda: id(disp1).set_component_text_printf("Home.date", "%i-%02i-%02i", id(homeassistant_time).now().year, id(homeassistant_time).now().month, id(homeassistant_time).now().day_of_month);
+          
+
+# Logger. Disable the temperature sensor etc. to focus on the HMI development
+logger:
+  baud_rate: 115200
+  #0
+  level: DEBUG
+  logs:
+    sensor: WARN
+    resistance: WARN
+    text_sensor: WARN
+    ntc: WARN
+
+# OTA (Over the air updates) password. Add to your secrets.yaml
+ota:
+
+
+# Uart for the Nextion display
+uart:
+  tx_pin: 16
+  rx_pin: 17
+  baud_rate: 115200
+  id: tf_uart
+
+
+
+# A reboot button is always useful
+button:
+  - platform: restart
+    name: $device_name Restart
+
+# Binary sensors
+binary_sensor:
+  # Left button below the display
+  - platform: gpio
+    name: $device_name Left Button
+    pin:
+      number: 14
+      inverted: true
+    on_click:
+      - switch.toggle: relay_1
+
+  # Right button below the display
+  - platform: gpio
+    name: $device_name Right Button
+    pin:
+      number: 27
+      inverted: true
+    on_click:
+      - switch.toggle: relay_2
+
+
+  # Buttons on the Music page    
+  - platform: nextion
+    name: $device_name Music previous
+    page_id: 1
+    component_id: 1
+
+
+  - platform: nextion
+    name: $device_name Music play pause
+    page_id: 1
+    component_id: 2
+    on_click:
+      - homeassistant.service:
+          service: media_player.media_play_pause
+          data:
+            entity_id: media_player.nesthub44af #Change ME - YOUR MEDIA PLAYER
+
+  - platform: nextion
+    name: $device_name Music next
+    page_id: 1
+    component_id: 3
+
+  - platform: nextion
+    name: $device_name Music cast
+    page_id: 1
+    component_id: 4
+
+  - platform: nextion
+    name: $device_name Music voldown
+    page_id: 1
+    component_id: 7
+    
+  - platform: nextion
+    name: $device_name Music volup
+    page_id: 1
+    component_id: 8
+    
+  - platform: nextion
+    name: $device_name Playlist cocktail
+    page_id: 1
+    component_id: 9
+
+  - platform: nextion
+    name: $device_name Playlist food
+    page_id: 1
+    component_id: 10
+    
+  - platform: nextion
+    name: $device_name Playlist dance
+    page_id: 1
+    component_id: 11
+
+  - platform: nextion
+    name: $device_name Playlist note
+    page_id: 1
+    component_id: 12    
+ 
+  #------------------------------------------------------------------------------   
+  # Buttons on the Lights page
+  # #Change ME - Button 1 and 2
+  - platform: nextion
+    name: $device_name Light 0 button
+    page_id: 2
+    component_id: 17
+    on_click:
+      - homeassistant.service:
+          service: switch.toggle
+          data:
+            entity_id: switch.office_light # Your light for button 1
+
+  - platform: nextion
+    name: $device_name Light 1 button
+    page_id: 2
+    component_id: 18
+    on_click:
+      - homeassistant.service:
+          service: light.toggle
+          data:
+            entity_id: light.kallax_lamp # Your light for button 2
+  #------------------------------------------------------------------------------          
+ 
+
+output:
+  # Buzzer for playing tones
+  - platform: ledc
+    id: buzzer_out
+    pin:
+      number: 21
+      
+switch:
+  # Physical relay 1
+  - platform: gpio
+    name: $device_name Relay 1
+    id: relay_1
+    pin:
+      number: 22
+
+  # Physical relay 2
+  - platform: gpio
+    name: $device_name Relay 2
+    id: relay_2
+    pin:
+      number: 19
+
+  # Turn screen power on/off. Easy way to configure the screen power control, but this should not be used from HA, as all components must be re-initialized afterwards. For lights, names of lights etc. this practically means that the state must change once to happen.
+  - platform: gpio
+    name: $device_name Screen Power
+    id: screen_power
+    entity_category: config
+    pin:
+      number: 4
+      inverted: true
+    restore_mode: ALWAYS_ON
+
+  # Basically a global variable to keep track on whether the Nextion display is ready or not. Delays initial info from HA to the display.
+  - platform: template
+    name: $device_name Nextion inited
+    id: nextion_init
+    entity_category: config
+    restore_state: false
+    assumed_state: off
+    optimistic: true
+    
+  # Show alarm screen on the display and disable it (except for physical buttons).
+  - platform: template
+    name: $device_name Alarm screen
+    id: alarm_activated
+    restore_state: false
+    assumed_state: off
+    optimistic: true
+    on_turn_on:
+      - lambda: id(disp1).send_command_printf("page 5");
+    on_turn_off:
+      - lambda: id(disp1).send_command_printf("page 0");
+
+  # Disable Dim-down-function on screen
+  - platform: template
+    name: $device_name Disable dim-down
+    id: disp1_disdim
+    restore_state: true
+    assumed_state: off
+    optimistic: true
+    on_turn_on:
+      - lambda: id(disp1).send_command_printf("Home.disdim.val=1");
+    on_turn_off:
+      - lambda: id(disp1).send_command_printf("Home.disdim.val=0");
+
+  # Disable Screensaver-function on screen
+  - platform: template
+    name: $device_name Disable screensaver
+    id: disp1_dissleep
+    restore_state: true
+    assumed_state: off
+    optimistic: true
+    on_turn_on:
+      - lambda: id(disp1).send_command_printf("Home.dissleep.val=1");
+    on_turn_off:
+      - lambda: id(disp1).send_command_printf("Home.dissleep.val=0");
+
+  # Disable Go to Home page-function on screen
+  - platform: template
+    name: $device_name Disable go to home
+    id: disp1_disgth
+    restore_state: true
+    assumed_state: off
+    optimistic: true
+    on_turn_on:
+      - lambda: id(disp1).send_command_printf("Home.disgth.val=1");
+    on_turn_off:
+      - lambda: id(disp1).send_command_printf("Home.disgth.val=0");
+
+
+# Rtttl function for buzzer
+rtttl:
+  id: buzzer
+  output: buzzer_out
+
+sensor:
+  # Internal temperature sensor, adc value
+  - platform: adc
+    id: ntc_source
+    pin: 38
+    update_interval: 10s
+    attenuation: 11db
+
+  # Internal temperature sensor, adc reading converted to resistance (calculation) 
+  - platform: resistance
+    id: resistance_sensor
+    sensor: ntc_source
+    configuration: DOWNSTREAM
+    resistor: 11.2kOhm
+
+  # Internal temperature sensor, resistance to temperature (calculation)
+  - platform: ntc
+    id: temperature
+    sensor: resistance_sensor
+    calibration:
+      b_constant: 3950
+      reference_temperature: 25°C
+      reference_resistance: 10kOhm
+    name: $device_name Temperature
+
+  # Uptime for the display. Also updates a human readable one (further down)
+  - platform: uptime
+    name: $device_name Uptime Sensor
+    id: uptime_sensor
+    update_interval: 60s
+    on_raw_value:
+      then:
+        - text_sensor.template.publish:
+            id: uptime_human
+            state: !lambda |-
+                int seconds = round(id(uptime_sensor).raw_state);
+                int days = seconds / (24 * 3600);
+                seconds = seconds % (24 * 3600);
+                int hours = seconds / 3600;
+                seconds = seconds % 3600;
+                int minutes = seconds /  60;
+                seconds = seconds % 60;
+                return (
+                  (days ? to_string(days) + "d " : "") +
+                  (hours ? to_string(hours) + "h " : "") +
+                  (minutes ? to_string(minutes) + "m " : "") +
+                  (to_string(seconds) + "s")
+                ).c_str();
+
+  # WiFi signals strength sensor
+  - platform: wifi_signal
+    name: $device_name WiFi Signal Sensor
+    update_interval: 60s
+
+  # Current page displayed on the HMi
+  - platform: nextion
+    name: $device_name Current display page
+    id: disp1_current_page
+    variable_name: dp
+    update_interval: 1s
+
+  # Temperature outside, fetched from HA
+  - platform: homeassistant
+    id: current_temperature
+    entity_id: weather.watt_home #Change ME - YOUR WEATHER ENTITY
+    attribute: temperature
+    on_value:
+      then:
+        - wait_until:
+            switch.is_on: nextion_init
+        - lambda: id(disp1).set_component_text_printf("Home.temp", "%.1f", id(current_temperature).state);
+
+  # Temperature outside feels like, fetched from HA
+  - platform: homeassistant
+    id: temp_feelslike
+    entity_id: sensor.outdoor_siren_temperature_measurement #Change ME - YOUR OUTSIDE TEMP
+    on_value:
+      then:
+        - wait_until:
+            switch.is_on: nextion_init
+        - lambda: id(disp1).set_component_text_printf("Home.tempfl", "%.1f", id(temp_feelslike).state);
+
+text_sensor:
+  # IP address of device. Not really needed for HA (as HA already knows it), but for showing on the display during startup. The startup screen will leave on if no instance connects to the API.
+  - platform: wifi_info
+    ip_address:
+      name: $device_name IP address
+      id: ip_address
+      on_value:
+        then:
+          - wait_until:
+              switch.is_on: nextion_init
+          - lambda: id(disp1).set_component_text_printf("Connecting.ip_addr", "%s", id(ip_address).state.c_str());
+
+  # Uptime in a human readable form. Updated from the uptime sensor
+  - platform: template
+    name: $device_name Uptime Human Readable
+    id: uptime_human
+    icon: mdi:clock-start
+
+  # ESPHome version used to compile the app
+  - platform: version
+    name: $device_name ESPHome Version
+
+  # Media player entity (or any text entity) to pull currently playing song name from
+  - platform: homeassistant
+    id: music_artist
+    entity_id: media_player.nesthub44af
+    attribute: media_artist
+    on_value:
+      then:
+        - lambda: id(disp1).set_component_text_printf("Music.music_sn", "%s", id(music_artist).state.c_str());
+
+  # Media player entity (or any text entity) to pull currently playing artist name from
+  - platform: homeassistant
+    id: music_title
+    entity_id: media_player.nesthub44af
+    attribute: media_title
+    on_value:
+      then:
+        - lambda: id(disp1).set_component_text_printf("Music.music_an", "%s", id(music_title).state.c_str());
+
+  # Sun sensor from HA. Used to decide whether a sun or moon weather symbol should be used.
+  - platform: homeassistant
+    id: sun_sun
+    entity_id: sun.sun
+
+  # Weather symbol, HA weather entity to pull data from
+  - platform: homeassistant
+    id: weather_symbol
+    entity_id: weather.watt_home #Change ME - YOUR WEATHER ENTITY
+    on_value:
+      then:
+        - wait_until:
+            switch.is_on: nextion_init
+        - lambda: |-
+            int symbol=5; // 5 is a empty box.
+            if (id(weather_symbol).state == "clear-night") {
+              symbol=6;
+            } else if (id(weather_symbol).state == "cloudy") {
+              symbol=7;
+              if (id(sun_sun).state == "below_horizon") {
+                symbol=8;
+              }
+            } else if (id(weather_symbol).state == "fog") {
+              symbol=9;
+            } else if (id(weather_symbol).state == "hail" || id(weather_symbol).state == "snowy-rainy") {
+              symbol=10;
+            } else if (id(weather_symbol).state == "lightning") {
+              symbol=11;
+            } else if (id(weather_symbol).state == "lightning-rainy" || id(weather_symbol).state == "exceptional") {
+              symbol=12;
+              if (id(sun_sun).state == "below_horizon") {
+                symbol=13;
+              }
+            } else if (id(weather_symbol).state == "partlycloudy") {
+              symbol=14;
+              if (id(sun_sun).state == "below_horizon") {
+                symbol=8;
+              }
+            } else if (id(weather_symbol).state == "pouring") {
+              symbol=15;
+            } else if (id(weather_symbol).state == "rainy") {
+              symbol=16;
+            } else if (id(weather_symbol).state == "snowy") {
+              symbol=17;
+            } else if (id(weather_symbol).state == "sunny") {
+              symbol=18;
+              if (id(sun_sun).state == "below_horizon") {
+                symbol = 6;
+              }
+            } else if (id(weather_symbol).state == "windy" || id(weather_symbol).state == "windy-variant") {
+              symbol=19;              
+            }
+            id(disp1).send_command_printf("Home.weather_symbol.pic=%i", symbol);
+
+  #Change ME - Configure Light 1 and 2 buttons (position 0 and 1)
+  - platform: homeassistant
+    id: officelight
+    entity_id: switch.office_light
+    on_value:
+      then:
+        - wait_until:
+            switch.is_on: nextion_init
+        - lambda: |-
+            int symbol = 23;
+            if (id(officelight).state == "off") {
+              symbol=22;
+            }
+            id(disp1).send_command_printf("Lights.light0.pic=%i", symbol);
+
+  # Light setup, first light's name
+  - platform: homeassistant
+    id: officelight_name
+    entity_id: switch.office_light
+    attribute: friendly_name
+    on_value:
+      then:
+        - wait_until:
+            switch.is_on: nextion_init
+        - lambda: id(disp1).set_component_text_printf("Lights.light0t", "%s", id(officelight_name).state.c_str());
+
+  - platform: homeassistant
+    id: kallaxleds
+    entity_id: light.kallax_leds
+    on_value:
+      then:
+        - wait_until:
+            switch.is_on: nextion_init
+        - lambda: |-
+            int symbol = 23;
+            if (id(kallaxleds).state == "off") {
+              symbol=29;
+            }
+            id(disp1).send_command_printf("Lights.light1.pic=%i", symbol);
+
+ 
+  - platform: homeassistant
+    id: kallaxleds_name
+    entity_id: light.kallax_leds
+    attribute: friendly_name
+    on_value:
+      then:
+        - wait_until:
+            switch.is_on: nextion_init
+        - lambda: id(disp1).set_component_text_printf("Lights.light1t", "%s", id(kallaxleds_name).state.c_str());
+
+
+
+ 
+       
+  # Home page, text line 1 (lower right part of screen)
+  - platform: homeassistant
+    id: home_text1
+    entity_id: person.mark_watt #Change ME Text info you might want on front screen
+    on_value:
+      then:
+        - wait_until:
+            switch.is_on: nextion_init
+        - lambda: id(disp1).set_component_text_printf("Home.text1", "%s", id(home_text1).state.c_str());
+        
+  # Home page, text line 2 (lower right part of screen)
+  - platform: homeassistant
+    id: home_text2
+    entity_id: sensor.nspanel_dev_uptime_sensor #Change ME - Text info you might want on front of screen
+    on_value:
+      then:
+        - wait_until:
+            switch.is_on: nextion_init
+        - lambda: id(disp1).set_component_text_printf("Home.text2", "%s", id(home_text2).state.c_str());
+
+
+number:
+  # Screen brightness
+  - platform: template
+    name: $device_name Brightness
+    id: brightness
+    entity_category: config
+    unit_of_measurement: '%'
+    min_value: 0
+    max_value: 100
+    step: 1
+    initial_value: 30
+    set_action:
+      then:
+        - lambda: 'id(disp1).set_backlight_brightness(x/100);'
+        - lambda: 'id(disp1).send_command_printf("Home.brightness.val=%i", int(x));'
+
+  # Screen brightness dimmed down
+  - platform: template
+    name: $device_name Brightness dimdown
+    id: brightness_dim
+    entity_category: config
+    unit_of_measurement: '%'
+    min_value: 0
+    max_value: 100
+    step: 1
+    initial_value: 1
+    set_action:
+      then:
+        - lambda: 'id(disp1).send_command_printf("Home.brightdd.val=%i", int(x));'
+
+      
+# Configure the screen itself
+display:
+  - platform: nextion
+    id: disp1
+    uart_id: tf_uart
+    tft_url: !secret tft_upload_url
+    # A little fun...
+    on_setup:
+      then:
+        # Enable 1 light page (up to 4 available)
+        - lambda: id(disp1).send_command_printf("Lights.pages.val=1");
+        - number.set:
+            id: brightness
+            value: 30
+        - lambda: id(disp1).send_command_printf("page 4");
+        - wait_until:
+            api.connected
+        - switch.template.publish:
+            id: nextion_init
+            state: on
+        - if:
+            condition:
+              - switch.is_on: alarm_activated
+            then:
+              - lambda: id(disp1).send_command_printf("page 5");
+            else:
+              - delay: 5s
+              - lambda: id(disp1).send_command_printf("page 0");
