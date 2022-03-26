@@ -1,5 +1,5 @@
 # MWT-NSPanel
-NSPanel based on marcfager panel
+NSPanel based on  [marcfager panel](https://github.com/marcfager/nspanel-mf)
 
 Tutorial for Code:
 
