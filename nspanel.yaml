@@ -5,6 +5,9 @@
 substitutions:
   # Name the device and it's entities
   device_name: nspanel-dev
+  wifi_ssid: !secret wifi_ssid
+  wifi_pass: !secret wifi_password
+  tft_url: !secret tft_upload_url
   
 # Functionality for the Nextion display
 external_components:
@@ -22,8 +25,8 @@ esp32:
 
 # Wifi settings. Add these to your secrets.yaml. fast_connect must be true for a hidden ssid.
 wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
+  ssid: $wifi_ssid
+  password: $wifi_pass
 
 
 # API. Add api_pwd to your secrets.yaml.
@@ -628,7 +631,7 @@ display:
   - platform: nextion
     id: disp1
     uart_id: tf_uart
-    tft_url: !secret tft_upload_url
+    tft_url: $tft_url
     # A little fun...
     on_setup:
       then:
